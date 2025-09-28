@@ -14,17 +14,19 @@ import datetime
 #######################################
 # basic variables you can change
 #######################################
-
-UrlListOfSentences = 'https://tatoeba.org/ru/sentences_lists/show/7407/eng/rus' # basic url with the list of the sentences (if there are many pages they will be processed page by page)
 getAudio = True # True if we grab audio if sentences in a source language have it
 getTags = True # True if we copy the tags if they exist
 getAutor = True # True if we want to know who is the author (will appear as an extra tag)
 srclang = ["eng"] # languages of source sentences (may be 1 or more that will appear on the question field). This should be 2-letter code ISO 639-1  https://en.wikipedia.org/wiki/List_of_ISO_639-2_codes
+listId = '' # if we want to get sentences from a list, e.g. 7407
+perPage = 10
+hasAudio = '' # true if get sentences only with audio, empty string if any is ok
 audio3letterslangcodes = ["eng"] # these codes are used in Tatoeba's url when you browse audio by language, e.g. cmn for Chinese in https://tatoeba.org/eng/sentences/with_audio/cmn
 targetlang = "rus" # target language code (will be on the answer's fiels)
+UrlListOfSentences = 'https://tatoeba.org/ru/api_v0/search?from={0}&to={1}&list={2}&trans_link=direct&has_audio={3}&limit={4}'.format(",".join(srclang), targetlang, listId, hasAudio, perPage) # basic url with the list of the sentences (if there are many pages they will be processed page by page)
 copymediafilestoankifolder = True # if true you should manually set your anki media folder
-#ankimediafolder = "C:\\Users\\atomi\\AppData\\Roaming\\Anki2\\Miles\\collection.media"  # this is "collection.media" folder which is normally located in your documents folder (in Windows)
-ankimediafolder = "/home/odexed/.local/share/Anki2/1-й пользователь/collection.media"
+ankimediafolder = "C:\\Users\\nekludov\\AppData\\Roaming\\Anki2\\1-й пользователь\\collection.media"  # this is "collection.media" folder which is normally located in your documents folder (in Windows)
+#ankimediafolder = "/home/odexed/.local/share/Anki2/1-й пользователь/collection.media"
 
 ########################################
 # Here the main code begins
@@ -41,7 +43,9 @@ except:
     print("The script couldn't create a temporary workdir foranki.")
     sys.exit(1)
 
-cfile = open("foranki/exampledeck.csv", "w")
+if os.path.exists("foranki/exampledeck.csv"):
+    os.remove("foranki/exampledeck.csv")
+cfile = open("foranki/exampledeck.csv", "a", encoding='utf-8')
 
 def procstring(string):
     res = string
@@ -60,7 +64,7 @@ def getTags(num):
     html = resp.read().decode('utf-8')
 
     if getTags:
-        tagname = re.findall('class="tagName".+?\>(.+?)\<', html, re.DOTALL)
+        tagname = re.findall('class="tagName".+?>(.+?)<', html, re.DOTALL)
         for i in tagname:
             taglist.append(i.strip().replace(" ", "_"))
 
@@ -120,32 +124,32 @@ def proclink(num):
 
 
 def mainproc():
+    processedCnt = 0
     # 1. get the list of sentences from the first page
     global UrlListOfSentences
-    UrlListOfSentences=UrlListOfSentences.replace('/page:1', '').replace('?page=1', '').rstrip("/")
-    delim = '?'
-    if '?' in UrlListOfSentences:
-        delim = '&'
-    resp = urllib.request.urlopen(UrlListOfSentences + delim + 'page=1')
+    url=UrlListOfSentences + '&page=1'
+    print(url)
+    resp = urllib.request.urlopen(url)
     if resp.getcode() != 200:
-        print("Failed to open " + UrlListOfSentences)
+        print("Failed to open " + url)
         sys.exit(1)
     html = resp.read().decode('utf-8')
+    data = json.loads(html)
     # how many pages there are in this list
-    pagescount = re.findall('page=(\d+?)\D', html)
-    if pagescount != []:
-        pagescount = max([int(x) for x in pagescount])
-    else:
-        pagescount = 0 # there is no pagination
+    itemsCount = data['paging']['Sentences']['count']
+    nextPage = bool(data['paging']['Sentences']['nextPage'])
+    current = data['paging']['Sentences']['current']
+    pageCount = data['paging']['Sentences']['pageCount']
 
-    #print(html)
+    processedCnt += current
+
     links = []
     sentences = []
 
-    jsonSentences = re.findall('<div ng-cloak flex.+?sentence-and-translations.+?ng-init="vm.init\(\[\]\,(.+?), \[',procstring(html),re.DOTALL)
+    jsonSentences = data['results']
     for jsonItem in jsonSentences:
-        #print(jsonItem)
-        jsonData = json.loads(jsonItem)
+        print(jsonItem)
+        jsonData = jsonItem
         links.append(str(jsonData['id']))
         sentences.append(jsonData['text'])
 
@@ -156,49 +160,53 @@ def mainproc():
         proclink(links[i])
 
     #print(links)
+    if not nextPage:
+        print("All items fit on the current page. No need to request the next one.")
+    else:
+        for counter in range(2, pageCount):
+            urlloop = UrlListOfSentences + "&page=" + str(counter)
+            print(urlloop)
+            resp = urllib.request.urlopen(urlloop)
+            if resp.getcode() != 200:
+                print("Failed to open " + urlloop)
+                sys.exit(1)
+            html = resp.read().decode('utf-8')
+            links = []
+            sentences = []
 
-    prCnt = 1 # this is a progress counter (not really necessary but kind of convenient feature)
+            # print(resp)
+            data = json.loads(html)
+            nextPage = bool(data['paging']['Sentences']['nextPage'])
+            current = data['paging']['Sentences']['current']
+            print(data['paging'])
+            processedCnt += current
+            jsonSentences = data['results']
+            for jsonItem in jsonSentences:
+                print(jsonItem)
+                links.append(str(jsonItem['id']))
+                sentences.append(jsonItem['text'])
 
-    for pagescounter in range(2, pagescount + 1):
-        # page=2 ?page=2
-        delim = '?'
-        if '?' in UrlListOfSentences:
-            delim = '&'
-        urlloop = UrlListOfSentences.rstrip("/") + delim + "page=" + str(pagescounter)
-        print(urlloop)
-        resp = urllib.request.urlopen(urlloop)
-        if resp.getcode() != 200:
-            print("Failed to open " + urlloop)
-            sys.exit(1)
-        html = resp.read().decode('utf-8')
-        # print html
-        links = []
-        sentences = []
+            resp.close()
+            for i in range(len(links)):
+                proclink(links[i])
 
-        jsonSentences = re.findall('<div ng-cloak flex.+?sentence-and-translations.+?ng-init="vm.init\(\[\]\,(.+?), \[',
-                                   procstring(html), re.DOTALL)
-        for jsonItem in jsonSentences:
-            # print(jsonItem)
-            jsonData = json.loads(jsonItem)
-            links.append(str(jsonData['id']))
-            sentences.append(jsonData['text'])
+            curPrcnt = (processedCnt*100.0) / itemsCount
+            #os.system('title ' + str(round(curPrcnt,3)) + '% completed')
+            when = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
+            print(when + " {0} elements processed of {1}, {2}% completed".format(processedCnt, itemsCount, round(curPrcnt,1)))
+            if not nextPage:
+                print('there is no next page... exiting')
+                break
 
-        resp.close()
-        for i in range(len(links)):
-            proclink(links[i])
-        prCnt += 1
-        curPrcnt = (100.0*prCnt) / pagescount
-        #os.system('title ' + str(round(curPrcnt,3)) + '% completed')
-        when = datetime.datetime.now().strftime("%d.%m.%Y %H:%M:%S")
-        print(when + ' ' + str(round(curPrcnt, 3)) + '% completed ' + '{0}/{1}'.format(prCnt, pagescount))
+        # copy media files to anki media folder
+        for root, dirs, files in os.walk('foranki'):
+            for f in files:
+                filename = os.path.join(root, f)
+                if filename.endswith('.mp3'):
+                    if copymediafilestoankifolder:
+                        shutil.copy2(filename, ankimediafolder)
 
-    # copy media files to anki media folder
-    for root, dirs, files in os.walk('foranki'):
-        for f in files:
-            filename = os.path.join(root, f)
-            if filename.endswith('.mp3'):
-                if copymediafilestoankifolder:
-                    shutil.copy2(filename, ankimediafolder)
 
-mainproc()
-cfile.close()
+if __name__ == '__main__':
+    mainproc()
+    cfile.close()
